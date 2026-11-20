@@ -2,7 +2,9 @@
 
 An interactive 3D simulation of a car that transforms into a standing humanoid robot, running in the browser.
 
-I designed the mechanism in **Onshape** as a set of simple rectangular blocks (torso, legs, two arms), exported it as a `.glb` file.
+I designed the mechanism in **Onshape** as a set of simple rectangular blocks (torso, legs, two arms), exported it as a `.glb` file, and wrote a web viewer that animates the transformation with a rig computed from the geometry of the model.
+
+Live demo: https://beldjilalibouchraa.github.io/car-to-robot-simulator/
 
 ## What it does
 
