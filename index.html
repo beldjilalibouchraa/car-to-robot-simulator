@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Car to Robot | Engineering Simulator</title>
+
+<style>
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    background: #0b1120;
+    color: #f1f5f9;
+    font-family: Arial, sans-serif;
+    overflow: hidden;
+}
+
+header {
+    height: 75px;
+    padding: 15px 28px;
+    background: #172338;
+    border-bottom: 1px solid #334155;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+header h2 { margin: 0; font-size: 20px; letter-spacing: 1px; }
+small { color: #94a3b8; }
+
+main { display: flex; height: calc(100vh - 75px); }
+
+#viewer { flex: 1; min-width: 0; position: relative; }
+#viewer canvas { display: block; }
+
+aside {
+    width: 280px;
+    flex-shrink: 0;
+    padding: 25px 20px;
+    background: #172338;
+    border-left: 1px solid #334155;
+    overflow-y: auto;
+}
+
+h3 { margin-top: 0; }
+.section { margin-top: 28px; }
+
+button {
+    width: 100%;
+    padding: 14px;
+    margin: 7px 0;
+    border: none;
+    border-radius: 7px;
+    background: #2563eb;
+    color: white;
+    cursor: pointer;
+    font-size: 15px;
+    font-weight: bold;
+    transition: 0.2s;
+}
+button:hover { background: #3b82f6; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+button:focus-visible { outline: 2px solid #93c5fd; outline-offset: 2px; }
+
+#status {
+    margin-top: 22px;
+    padding: 12px;
+    border-radius: 7px;
+    background: #0f2038;
+    color: #60a5fa;
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+#progressContainer { margin-top: 20px; }
+#progressBar {
+    width: 100%;
+    height: 7px;
+    background: #334155;
+    border-radius: 10px;
+    overflow: hidden;
+    margin: 8px 0 4px;
+}
+#progress { width: 0%; height: 100%; background: #3b82f6; }
+
+@media (max-width: 700px) {
+    main { flex-direction: column; }
+    #viewer { min-height: 55vh; }
+    aside { width: 100%; border-left: none; }
+}
+</style>
+</head>
+
+<body>
+
+<header>
+    <div>
+        <h2>CAR → ROBOT | 3D SIMULATOR</h2>
+        <small>Mechanical Engineering Project</small>
+    </div>
+    <small>THREE.JS / WEBGL</small>
+</header>
+
+<main>
+
+    <div id="viewer"></div>
+
+    <aside>
+
+        <h3>Simulation Controls</h3>
+
+        <button id="btnTransform" disabled>Transform</button>
+
+        <div id="progressContainer">
+            <small>Transformation progress</small>
+            <div id="progressBar"><div id="progress"></div></div>
+            <small id="progressText">0%</small>
+        </div>
+
+        <p id="status">Loading 3D model...</p>
+
+        <div class="section">
+            <h3>Model Information</h3>
+            <small>
+                CAD model exported from Onshape.<br><br>
+                Sequence: legs, torso, then arms.<br>
+                Drag with the mouse to look around.
+            </small>
+        </div>
+
+        <div class="section">
+            <hr style="border-color:#334155">
+            <small>3D visualization powered by Three.js</small>
+        </div>
+
+    </aside>
+
+</main>
+
+<script type="importmap">
+{
+    "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+}
+</script>
+
+<script type="module">
+
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+
+// ==================================================
+// SETTINGS
+// ==================================================
+
+const MODEL_URL = 'models/robot.glb';   // relative path: works locally and on GitHub Pages
+
+const DURATION_MS = 5000;        // total animation time
+const ARM_ANGLE_DEG = 45;        // how far the arms swing away from the body
+
+// When the parts move (0 to 1 of the animation): legs, then torso, then arms
+const SPANS = {
+    legs:  [0.00, 0.40],
+    torso: [0.40, 0.75],
+    arms:  [0.75, 1.00]
+};
+
+// If the car lies on the wrong face (upside down), set this to true
+const FLIP_UPSIDE_DOWN = false;
+
+// If the robot stands upside down (legs on top), set this to true
+const FLIP_STAND_DIRECTION = false;
+
+// Which car axis becomes the robot's height: 'auto', 'x' or 'z'
+// (auto = the direction from the legs block to the torso block)
+const UP_AXIS = 'auto';
+
+// Colours the parts and draws block edges
+const TINT_PARTS = true;
+
+// "match" is searched in the node names of the GLB
+const PARTS = {
+    legs:      { label: 'Legs',      match: 'leg',      color: 0x16a34a },
+    torso:     { label: 'Torso',     match: 'torso',    color: 0x2563eb },
+    right_arm: { label: 'Right arm', match: 'rightarm', color: 0xf59e0b },
+    left_arm:  { label: 'Left arm',  match: 'leftarm',  color: 0xef4444 }
+};
+
+
+// ==================================================
+// SCENE
+// ==================================================
+
+const viewer = document.getElementById('viewer');
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b1120);
+
+const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
+camera.position.set(2.6, 1.8, 3.2);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+viewer.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.05;
+controls.target.set(0, 0.6, 0);
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x444466, 2));
+const sun = new THREE.DirectionalLight(0xffffff, 3);
+sun.position.set(3, 5, 4);
+scene.add(sun);
+
+scene.add(new THREE.GridHelper(5, 30, 0x475569, 0x263449));
+
+function resize() {
+    const w = viewer.clientWidth;
+    const h = viewer.clientHeight;
+    if (!w || !h) return;
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    renderer.setSize(w, h);
+}
+new ResizeObserver(resize).observe(viewer);
+resize();
+
+
+// ==================================================
+// HELPERS
+// ==================================================
+
+const $ = (id) => document.getElementById(id);
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const smooth = (t) => t * t * (3 - 2 * t);
+const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+const UP = new THREE.Vector3(0, 1, 0);
+
+function setStatus(text) { $('status').textContent = text; }
+
+// 0 before the span, 1 after it, smooth in between
+function phase(t, span) {
+    return smooth(clamp((t - span[0]) / (span[1] - span[0]), 0, 1));
+}
+
+
+// ==================================================
+// STATE
+// ==================================================
+
+let robot = null;
+let root = null;                       // moves everything (slides the robot to the centre)
+let legsHolder = null;                 // hinge at the feet
+let torsoHolder = null;                // hinge between legs and torso
+const armHolders = [];                 // { holder, sign }
+
+const F = new THREE.Vector3();         // foot edge (pivot of the legs)
+const J0 = new THREE.Vector3();        // hip (pivot of the torso)
+const axis = new THREE.Vector3();      // rotation axis of legs and torso
+const shift = new THREE.Vector3();     // slide that centres the standing robot
+
+const state = { t: 0, anim: null, ready: false };
+
+const q1 = new THREE.Quaternion();
+
+
+// ==================================================
+// LOAD MODEL
+// ==================================================
+
+new GLTFLoader().load(
+    MODEL_URL,
+    (gltf) => {
+        robot = gltf.scene;
+        scene.add(robot);
+
+        orientFlat();
+        fitToGrid();
+        buildRig();
+    },
+    undefined,
+    (error) => {
+        console.error('MODEL LOADING ERROR:', error);
+        setStatus('Model loading failed. Check that models/robot.glb exists. Locally, open the page through http://127.0.0.1:8000 (not by double-clicking the file).');
+    }
+);
+
+// Car pose: the thinnest side points up, so the largest face lies on the ground
+function orientFlat() {
+    robot.updateMatrixWorld(true);
+    const s = new THREE.Box3().setFromObject(robot).getSize(new THREE.Vector3());
+
+    if (s.x <= s.y && s.x <= s.z) robot.rotation.z = Math.PI / 2;        // x is the thinnest
+    else if (s.z <= s.y && s.z <= s.x) robot.rotation.x = Math.PI / 2;   // z is the thinnest
+
+    if (FLIP_UPSIDE_DOWN) robot.rotateOnWorldAxis(new THREE.Vector3(1, 0, 0), Math.PI);
+    robot.updateMatrixWorld(true);
+}
+
+// Scale to a fixed size, centre on the grid, rest on the floor
+function fitToGrid() {
+    const box = new THREE.Box3().setFromObject(robot);
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    if (maxDim > 0) robot.scale.setScalar(1.5 / maxDim);
+    robot.updateMatrixWorld(true);
+
+    box.setFromObject(robot);
+    const c = box.getCenter(new THREE.Vector3());
+    robot.position.x -= c.x;
+    robot.position.z -= c.z;
+    robot.position.y -= box.min.y;
+    robot.updateMatrixWorld(true);
+}
+
+function findNode(rootNode, match) {
+    const m = norm(match);
+    let found = null;
+    rootNode.traverse((o) => {
+        if (!found && o !== rootNode && norm(o.name).includes(m)) found = o;
+    });
+    return found;
+}
+
+function tint(node, color) {
+    node.traverse((o) => {
+        if (!o.isMesh) return;
+        o.material = new THREE.MeshStandardMaterial({ color, metalness: 0.3, roughness: 0.5 });
+        o.add(new THREE.LineSegments(
+            new THREE.EdgesGeometry(o.geometry),
+            new THREE.LineBasicMaterial({ color: 0x0b1120 })
+        ));
+    });
+}
+
+// A holder is an empty group placed on a hinge. Rotating the holder swings
+// the part around that hinge, so the part stays attached.
+// Only call while the model is in the car pose.
+function makeHolder(parent, pivotWorld, node) {
+    scene.updateMatrixWorld(true);
+    const holder = new THREE.Group();
+    parent.add(holder);
+    holder.position.copy(parent.worldToLocal(pivotWorld.clone()));
+    holder.updateMatrixWorld(true);
+    holder.attach(node);               // keeps the world position of the part
+    return holder;
+}
+
+
+// ==================================================
+// RIG: works out hinges from the layout of the blocks
+// ==================================================
+
+function buildRig() {
+    // find every part and measure it
+    const found = {};
+    const missing = [];
+    for (const [key, cfg] of Object.entries(PARTS)) {
+        const node = findNode(robot, cfg.match);
+        if (!node) { missing.push(cfg.label); continue; }
+        if (TINT_PARTS) tint(node, cfg.color);
+        found[key] = { node, box: new THREE.Box3().setFromObject(node) };
+    }
+
+    const names = [];
+    robot.traverse((o) => { if (o !== robot) names.push(o.name || '(unnamed)'); });
+    console.log('GLB nodes:', names);
+
+    if (!found.legs || !found.torso) {
+        setStatus('Part not found: ' + missing.join(', ') +
+            '. Press F12, open Console, and check the node names; then change "match" in PARTS.');
+        return;
+    }
+
+    const body = new THREE.Box3().setFromObject(robot);
+    const centerOf = (box) => box.getCenter(new THREE.Vector3());
+    const lc = centerOf(found.legs.box);
+    const tc = centerOf(found.torso.box);
+
+    // U = the car axis that becomes the robot's height (legs -> torso direction)
+    // R = the other horizontal axis: the robot's left-right axis
+    let U;
+    if (UP_AXIS === 'x') U = 0;
+    else if (UP_AXIS === 'z') U = 2;
+    else U = Math.abs(tc.z - lc.z) > Math.abs(tc.x - lc.x) ? 2 : 0;
+    const R = U === 0 ? 2 : 0;
+
+    // u = unit vector pointing from the legs towards the torso (becomes "up")
+    let sign = tc.getComponent(U) >= lc.getComponent(U) ? 1 : -1;
+    if (FLIP_STAND_DIRECTION) sign = -sign;
+    const u = new THREE.Vector3();
+    u.setComponent(U, sign);
+
+    // Legs and torso tip forward/backward around the left-right axis (R)
+    axis.copy(u).cross(UP).normalize();
+
+    // foot edge: the far end of the LEGS block, on the floor
+    const legsFar = sign > 0 ? found.legs.box.min : found.legs.box.max;
+    F.set(0, 0, 0);
+    F.setComponent(U, legsFar.getComponent(U));
+    F.setComponent(R, lc.getComponent(R));
+    F.y = body.min.y;
+
+    // hip: where the legs end and the torso begins
+    const legsNear = sign > 0 ? found.legs.box.max : found.legs.box.min;
+    J0.set(0, 0, 0);
+    J0.setComponent(U, legsNear.getComponent(U));
+    J0.setComponent(R, lc.getComponent(R));
+    J0.y = lc.y;
+
+    // once standing, the legs cover a patch of floor: slide the robot to the grid centre
+    const footCenter = F.clone().addScaledVector(u, -(lc.y - F.y));
+    shift.set(-footCenter.x, 0, -footCenter.z);
+
+    // hierarchy: root > legs hinge, root > torso hinge > arm hinges
+    root = new THREE.Group();
+    scene.add(root);
+    root.updateMatrixWorld(true);
+
+    legsHolder = makeHolder(root, F, found.legs.node);
+    torsoHolder = makeHolder(root, J0, found.torso.node);
+
+    // arms: hinge at the shoulder, on the face nearest the torso, swing away from it
+    for (const key of ['right_arm', 'left_arm']) {
+        const arm = found[key];
+        if (!arm) continue;
+
+        const ac = centerOf(arm.box);
+        const asz = arm.box.getSize(new THREE.Vector3());
+
+        // outward = which side of the torso the arm is on (along the left-right axis)
+        const outward = Math.sign(ac.getComponent(R) - tc.getComponent(R)) || (key === 'left_arm' ? 1 : -1);
+        const away = new THREE.Vector3();
+        away.setComponent(R, outward);
+
+        const inner = outward > 0 ? arm.box.min : arm.box.max;   // face touching the torso
+        const hangs = asz.getComponent(U) >= asz.getComponent(R); // arm is long in the height direction
+
+        const shoulder = new THREE.Vector3();
+        shoulder.y = ac.y;
+        shoulder.setComponent(R, inner.getComponent(R));
+
+        let handDir, goal;
+        if (hangs) {
+            // hangs along the body: shoulder at the top, hand swings outward
+            const top = sign > 0 ? arm.box.max : arm.box.min;
+            shoulder.setComponent(U, top.getComponent(U));
+            handDir = u.clone().negate();
+            goal = away;
+        } else {
+            // sticks out sideways: shoulder at the inner end, hand swings up
+            shoulder.setComponent(U, ac.getComponent(U));
+            handDir = away.clone();
+            goal = u;
+        }
+
+        // choose the rotation direction that moves the hand towards the goal
+        const turned = handDir.clone().applyAxisAngle(UP, 0.5);
+        const armSign = turned.dot(goal) > 0 ? 1 : -1;
+
+        armHolders.push({ holder: makeHolder(torsoHolder, shoulder, arm.node), sign: armSign });
+    }
+
+    const r3 = (v) => v.toArray().map((n) => Math.round(n * 1000) / 1000);
+    console.log('Layout', {
+        up_axis: 'xyz'[U], left_right_axis: 'xyz'[R], legs_to_torso: r3(u),
+        rotation_axis: r3(axis), foot_edge: r3(F), hip: r3(J0),
+        legs_center: r3(lc), torso_center: r3(tc), arms_found: armHolders.length
+    });
+    for (const [k, p] of Object.entries(found)) {
+        console.log(k, 'size', r3(p.box.getSize(new THREE.Vector3())), 'center', r3(centerOf(p.box)));
+    }
+
+    state.ready = true;
+    applyPose(0);
+
+    setStatus(missing.length
+        ? 'Car mode. Not found: ' + missing.join(', ')
+        : 'Car mode');
+    $('btnTransform').disabled = false;
+}
+
+
+// ==================================================
+// POSE    t = 0 -> car lying flat, t = 1 -> robot standing
+// ==================================================
+
+function applyPose(t) {
+    const eLegs = phase(t, SPANS.legs);
+    const eTorso = phase(t, SPANS.torso);
+    const eArms = phase(t, SPANS.arms);
+    const quarter = Math.PI / 2;
+
+    // 1) legs stand up around the foot edge
+    q1.setFromAxisAngle(axis, quarter * eLegs);
+    legsHolder.quaternion.copy(q1);
+
+    // the torso hinge rides on top of the legs
+    torsoHolder.position.copy(J0).sub(F).applyQuaternion(q1).add(F);
+
+    // 2) torso swings up around the hip
+    torsoHolder.quaternion.setFromAxisAngle(axis, quarter * eTorso);
+
+    // 3) arms swing away from the body
+    const armAngle = THREE.MathUtils.degToRad(ARM_ANGLE_DEG) * eArms;
+    for (const a of armHolders) a.holder.quaternion.setFromAxisAngle(UP, a.sign * armAngle);
+
+    // keep the standing robot on the grid centre
+    root.position.copy(shift).multiplyScalar(eLegs);
+
+    updateUI(t);
+}
+
+function updateUI(t) {
+    const pct = Math.round(t * 100);
+    $('progress').style.width = pct + '%';
+    $('progressText').textContent = pct + '%';
+
+    const busy = !!state.anim;
+    const btn = $('btnTransform');
+    btn.disabled = !state.ready || busy;
+    btn.textContent = t >= 0.5 && !busy ? 'Transform to Car' : (busy ? 'Transforming...' : 'Transform to Robot');
+    if (busy) btn.textContent = state.anim.to === 1 ? 'Becoming Robot...' : 'Becoming Car...';
+
+    if (state.ready) {
+        if (busy) setStatus(state.anim.to === 1 ? 'Transforming to robot...' : 'Transforming to car...');
+        else if (t <= 0) setStatus('Car mode');
+        else if (t >= 1) setStatus('Robot mode');
+    }
+}
+
+
+// ==================================================
+// BUTTON
+// ==================================================
+
+$('btnTransform').addEventListener('click', () => {
+    if (!state.ready || state.anim) return;
+    state.anim = {
+        from: state.t,
+        to: state.t >= 0.5 ? 0 : 1,
+        startTime: performance.now()
+    };
+    updateUI(state.t);
+});
+
+
+// ==================================================
+// RENDER LOOP
+// ==================================================
+
+function animate(now) {
+    requestAnimationFrame(animate);
+
+    if (state.anim) {
+        const a = state.anim;
+        const k = clamp((now - a.startTime) / DURATION_MS, 0, 1);
+        state.t = a.from + (a.to - a.from) * k;
+        if (k >= 1) state.anim = null;
+        applyPose(state.t);
+    }
+
+    controls.update();
+    renderer.render(scene, camera);
+}
+requestAnimationFrame(animate);
+
+</script>
+
+</body>
+</html>
